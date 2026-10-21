@@ -3,6 +3,7 @@
 # Usage: scripts/build_mac.sh /path/to/AfterEffectsSDK
 # Needs the full Xcode app (xcodebuild) and the Adobe After Effects SDK (27.x tested against headers).
 set -euo pipefail
+echo "build_mac.sh v3 (Xcode project build) running from: $(cd "$(dirname "$0")/.." && pwd)"
 SDK="$(cd "${1:?usage: $0 /path/to/AfterEffectsSDK}" && pwd)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build-mac"
