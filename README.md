@@ -17,6 +17,10 @@ Shutter Angle, Shutter Phase, Blur Amount %, Max Samples, Vector Smoothness, Edg
 ## Build & test the core (any platform)
     cmake -S . -B build && cmake --build build && ./build/test_motion_blur
 
+## Quick start on macOS
+    scripts/build_mac.sh /path/to/AfterEffectsSDK   # produces build-mac/VectorMotionBlur.plugin
+The script is untested on a real Mac; if the SDK headers reject something, fix the compile error it prints and re-run.
+
 ## Build the After Effects plugin
 The Adobe After Effects SDK is not redistributable; download it from Adobe and:
 
