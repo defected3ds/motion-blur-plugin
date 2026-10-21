@@ -34,3 +34,7 @@ if(AE_SDK_DIR)
     set_target_properties(VectorMotionBlur PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION "plugin")
   endif()
 endif()
+
+# Standalone video tool (needs ffmpeg + ffprobe on PATH at runtime)
+add_executable(mbvideo cli/mbvideo.cpp)
+target_link_libraries(mbvideo mbcore)

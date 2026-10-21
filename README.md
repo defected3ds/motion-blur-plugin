@@ -1,4 +1,14 @@
-# Vector Motion Blur (After Effects plugin)
+# Vector Motion Blur
+
+## Simplest way to use it: `mbvideo` (macOS/Linux, no Adobe SDK)
+    brew install ffmpeg            # once
+    ./build_mac.command            # once; builds ./mbvideo (needs Xcode command line tools)
+    ./mbvideo input.mp4 output.mp4 [--shutter 180] [--phase -90] [--amount 100] [--samples 64]
+                                   [--smooth 0.1] [--edge-aware] [--vectors]
+Import `output.mp4` into After Effects (or anything else). Audio is copied through.
+Without libomp it is single-threaded (slow on HD/4K); `brew install libomp` before building enables threads.
+
+## After Effects plugin (needs Adobe's SDK)
 
 An RSMB-style (ReelSmart Motion Blur) effect: it adds motion blur to footage that has none by
 estimating per-pixel motion from neighbouring frames and blurring along those vectors.
