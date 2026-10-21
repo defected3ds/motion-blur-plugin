@@ -2,10 +2,25 @@
 
 #include <algorithm>
 #include <cmath>
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
 
 namespace mb {
 
 namespace {
+
+// Run f(row) for row in [0,n) on all cores: GCD on macOS (no extra install), OpenMP elsewhere.
+template <class F>
+void parallelRows(int n, F&& f) {
+#ifdef __APPLE__
+    dispatch_apply((size_t)n, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) { f((int)i); });
+#else
+#pragma omp parallel for
+    for (int i = 0; i < n; ++i) f(i);
+#endif
+}
+
 
 struct Plane {
     int w = 0, h = 0;
@@ -42,14 +57,13 @@ Plane lumaOf(const Image& im) {
 Plane blur3(const Plane& s) {
     Plane o(s.w, s.h);
     static const float k[3] = {0.25f, 0.5f, 0.25f};
-#pragma omp parallel for
-    for (int y = 0; y < s.h; ++y)
+    parallelRows(s.h, [&](int y) {
         for (int x = 0; x < s.w; ++x) {
             float acc = 0;
             for (int j = -1; j <= 1; ++j)
                 for (int i = -1; i <= 1; ++i) acc += k[i + 1] * k[j + 1] * s.clamped(x + i, y + j);
             o(x, y) = acc;
-        }
+        }});
     return o;
 }
 
@@ -111,8 +125,7 @@ FlowField estimateFlow(const Image& a, const Image& b, const Params& prm) {
         Plane Ix(A.w, A.h), Iy(A.w, A.h), It(A.w, A.h), du(A.w, A.h), dv(A.w, A.h);
         Plane ub(A.w, A.h), vb(A.w, A.h);
         for (int warp = 0; warp < prm.warps; ++warp) {
-#pragma omp parallel for
-            for (int y = 0; y < A.h; ++y)
+            parallelRows(A.h, [&](int y) {
                 for (int x = 0; x < A.w; ++x) {
                     float wx = x + u(x, y), wy = y + v(x, y);
                     float bw = bilinear(B, wx, wy);
@@ -125,25 +138,23 @@ FlowField estimateFlow(const Image& a, const Image& b, const Params& prm) {
                     It(x, y) = bw - A(x, y);
                     du(x, y) = 0.f;
                     dv(x, y) = 0.f;
-                }
+                }});
             for (int it = 0; it < prm.iterations; ++it) {
-#pragma omp parallel for
-                for (int y = 0; y < A.h; ++y)
+                parallelRows(A.h, [&](int y) {
                     for (int x = 0; x < A.w; ++x) {
                         ub(x, y) = 0.25f * (du.clamped(x - 1, y) + du.clamped(x + 1, y) +
                                             du.clamped(x, y - 1) + du.clamped(x, y + 1));
                         vb(x, y) = 0.25f * (dv.clamped(x - 1, y) + dv.clamped(x + 1, y) +
                                             dv.clamped(x, y - 1) + dv.clamped(x, y + 1));
-                    }
-#pragma omp parallel for
-                for (int y = 0; y < A.h; ++y)
+                    }});
+                parallelRows(A.h, [&](int y) {
                     for (int x = 0; x < A.w; ++x) {
                         float ix = Ix(x, y), iy = Iy(x, y);
                         float t = (ix * ub(x, y) + iy * vb(x, y) + It(x, y)) /
                                   (alpha2 + ix * ix + iy * iy);
                         du(x, y) = ub(x, y) - ix * t;
                         dv(x, y) = vb(x, y) - iy * t;
-                    }
+                    }});
             }
             for (size_t i = 0; i < u.d.size(); ++i) {
                 u.d[i] += du.d[i];
@@ -166,8 +177,7 @@ static void sharpenFlowEdges(FlowField& f, const Image& guide, const Params& p) 
     const float inv2r = 1.f / (2.f * p.edgeSharpen * p.edgeSharpen);
     const float inv2s = 1.f / (2.f * 2.5f * 2.5f);
     std::vector<float> ou(f.u.size()), ov(f.v.size());
-#pragma omp parallel for
-    for (int y = 0; y < H; ++y)
+    parallelRows(H, [&](int y) {
         for (int x = 0; x < W; ++x) {
             float su = 0, sv = 0, sw = 0, gc = g(x, y);
             for (int j = -R; j <= R; ++j)
@@ -180,12 +190,54 @@ static void sharpenFlowEdges(FlowField& f, const Image& guide, const Params& p) 
                 }
             size_t o = size_t(y) * W + x;
             ou[o] = su / sw; ov[o] = sv / sw;
-        }
+        }});
     f.u = std::move(ou);
     f.v = std::move(ov);
 }
 
+// Box-average downscale by an integer factor.
+static Image boxDown(const Image& s, int k) {
+    Image o((s.w + k - 1) / k, (s.h + k - 1) / k);
+    parallelRows(o.h, [&](int y) {
+        for (int x = 0; x < o.w; ++x) {
+            float acc[4] = {0, 0, 0, 0};
+            int n = 0;
+            for (int j = 0; j < k && y * k + j < s.h; ++j)
+                for (int i = 0; i < k && x * k + i < s.w; ++i, ++n) {
+                    const float* px = s.at(x * k + i, y * k + j);
+                    for (int c = 0; c < 4; ++c) acc[c] += px[c];
+                }
+            for (int c = 0; c < 4; ++c) o.at(x, y)[c] = acc[c] / n;
+        }
+    });
+    return o;
+}
+
 FlowField estimateVelocity(const Image& cur, const Image* prev, const Image* next, const Params& p) {
+    const int k = (p.flowMaxDim > 0) ? (std::max(cur.w, cur.h) + p.flowMaxDim - 1) / p.flowMaxDim : 1;
+    if (k > 1) {
+        // Motion is smooth, so estimate it on a reduced copy and scale the vectors back up.
+        Image sc = boxDown(cur, k), sp, sn;
+        if (prev) sp = boxDown(*prev, k);
+        if (next) sn = boxDown(*next, k);
+        Params q = p;
+        q.flowMaxDim = 0;
+        q.edgeSharpen = 0.f;
+        FlowField small = estimateVelocity(sc, prev ? &sp : nullptr, next ? &sn : nullptr, q);
+        FlowField full(cur.w, cur.h);
+        Plane pu, pv;
+        pu.w = pv.w = small.w; pu.h = pv.h = small.h;
+        pu.d = small.u; pv.d = small.v;
+        parallelRows(full.h, [&](int y) {
+            for (int x = 0; x < full.w; ++x) {
+                float sx = (x + 0.5f) / k - 0.5f, sy = (y + 0.5f) / k - 0.5f;
+                full.u[size_t(y) * full.w + x] = bilinear(pu, sx, sy) * k;
+                full.v[size_t(y) * full.w + x] = bilinear(pv, sx, sy) * k;
+            }
+        });
+        sharpenFlowEdges(full, cur, p);
+        return full;
+    }
     FlowField vel(cur.w, cur.h);
     FlowField fwd, bwd;
     if (next) fwd = estimateFlow(cur, *next, p);   // cur -> next
@@ -268,8 +320,7 @@ Image applyVectorBlur(const Image& cur, const FlowField& vel, const Params& p) {
             }
     }
 
-#pragma omp parallel for
-    for (int y = 0; y < H; ++y) {
+    parallelRows(H, [&](int y) { {
         for (int x = 0; x < W; ++x) {
             const size_t i = size_t(y) * W + x;
             float* dst = out.at(x, y);
@@ -322,7 +373,7 @@ Image applyVectorBlur(const Image& cur, const FlowField& vel, const Params& p) {
             // Rejected taps are replaced by this pixel's own colour.
             for (int k = 0; k < 4; ++k) dst[k] = (acc[k] + (float(n) - wsum) * c0[k]) / n;
         }
-    }
+    }});
     return out;
 }
 

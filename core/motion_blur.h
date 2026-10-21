@@ -35,7 +35,8 @@ struct Params {
     bool  edgeAware = false;     // reach-weighted gather; big win with accurate vectors, neutral/worse with noisy ones
     // Flow estimation
     float smoothness = 0.1f;     // Horn-Schunck alpha (on 0..1 luma); higher = smoother vectors
-    float edgeSharpen = 0.08f;   // luma tolerance of the edge-guided vector filter (0 = off)
+    float edgeSharpen = 0.f;     // luma tolerance of the edge-guided vector filter (0 = off; slow at HD)
+    int   flowMaxDim = 480;      // estimate motion on a copy no larger than this (0 = full res); vectors are scaled up
     int   iterations = 40;       // solver iterations per warp step
     int   warps = 2;             // warp steps per pyramid level
     int   maxLevels = 6;         // pyramid depth cap
