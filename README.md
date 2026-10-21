@@ -8,6 +8,12 @@
 Import `output.mp4` into After Effects (or anything else). Audio is copied through.
 Without libomp it is single-threaded (slow on HD/4K); `brew install libomp` before building enables threads.
 
+## After Effects script (no SDK needed)
+`ae_script/VectorMotionBlur.jsx`: in After Effects choose File > Scripts > Run Script File..., select a footage layer, pick
+settings. It runs `mbvideo` on the layer's source file, imports the result and stacks it above the original (original is hidden).
+Enable Preferences > Scripting & Expressions > "Allow Scripts to Write Files and Access Network". Untested inside After Effects.
+Limits: plain video-file layers only (effects/masks/transforms on the layer are not included).
+
 ## After Effects plugin (needs Adobe's SDK)
 
 An RSMB-style (ReelSmart Motion Blur) effect: it adds motion blur to footage that has none by
