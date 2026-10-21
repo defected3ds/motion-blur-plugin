@@ -32,7 +32,7 @@ enum {
 // Must match AE_Effect_Global_OutFlags in MotionBlur.r.
 static const A_long kOutFlags = PF_OutFlag_DEEP_COLOR_AWARE | PF_OutFlag_WIDE_TIME_INPUT;  // 0x02000002
 
-static PF_Err About(PF_InData*, PF_OutData* out, PF_ParamDef*[], PF_LayerDef*) {
+static PF_Err About(PF_InData* in_data, PF_OutData* out, PF_ParamDef*[], PF_LayerDef*) {
     PF_SPRINTF(out->return_msg, "Vector Motion Blur 1.0\rOptical-flow based motion blur.");
     return PF_Err_NONE;
 }
@@ -44,7 +44,7 @@ static PF_Err GlobalSetup(PF_InData*, PF_OutData* out, PF_ParamDef*[], PF_LayerD
     return PF_Err_NONE;
 }
 
-static PF_Err ParamsSetup(PF_InData* in, PF_OutData* out, PF_ParamDef*[], PF_LayerDef*) {
+static PF_Err ParamsSetup(PF_InData* in_data, PF_OutData* out, PF_ParamDef*[], PF_LayerDef*) {  // macros need the name `in_data`
     PF_ParamDef def;
     AEFX_CLR_STRUCT(def);
     PF_ADD_FLOAT_SLIDERX("Shutter Angle", 0, 720, 0, 360, 180, PF_Precision_TENTHS, 0, 0, PARAM_SHUTTER_ANGLE);
@@ -61,7 +61,6 @@ static PF_Err ParamsSetup(PF_InData* in, PF_OutData* out, PF_ParamDef*[], PF_Lay
     AEFX_CLR_STRUCT(def);
     PF_ADD_CHECKBOX("Motion Vectors", "Show", 0, 0, PARAM_SHOW_VECTORS);
     out->num_params = PARAM_COUNT;
-    (void)in;
     return PF_Err_NONE;
 }
 
@@ -156,6 +155,16 @@ static PF_Err Render(PF_InData* in, PF_OutData*, PF_ParamDef* params[], PF_Layer
     if (havePrev) PF_CHECKIN_PARAM(in, &prevDef);
     if (haveNext) PF_CHECKIN_PARAM(in, &nextDef);
     return err;
+}
+
+// SDK 27+: effects register themselves with the host via this entry point (in addition to the PiPL).
+extern "C" DllExport PF_Err PluginDataEntryFunction2(PF_PluginDataPtr inPtr, PF_PluginDataCB2 inPluginDataCallBackPtr,
+                                                    SPBasicSuite*, const char*, const char*) {
+    PF_Err result = PF_Err_INVALID_CALLBACK;
+    PF_REGISTER_EFFECT_EXT2(inPtr, inPluginDataCallBackPtr, "Vector Motion Blur",
+                                     "PIPELIFE Vector Motion Blur", "Blur & Sharpen", AE_RESERVED_INFO,
+                                     "EffectMain", "https://www.adobe.com");
+    return result;
 }
 
 extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd, PF_InData* in, PF_OutData* out, PF_ParamDef* params[],

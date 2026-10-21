@@ -42,7 +42,8 @@ The Adobe After Effects SDK is not redistributable; download it from Adobe and:
 
     cmake -S . -B build -DAE_SDK_DIR=/path/to/AfterEffectsSDK && cmake --build build
 
-* macOS: the target produces a `.plugin` bundle; compile `ae/MotionBlur.r` with `Rez` into the bundle's resources.
+* macOS: use `scripts/build_mac.sh /path/to/AfterEffectsSDK` (stages Adobe's Skeleton Xcode project with our files and runs `xcodebuild`;
+  needs the full Xcode app). The C++ was compile-checked against SDK 27.0 headers; the Xcode/PiPL step and loading in AE are untested.
 * Windows: compile `ae/MotionBlur.r` with `cl /EP` + `PiPLtool` into a `.rc`, add it to the module, rename to `.aex`.
   (Easiest is to copy the SDK's `Skeleton` sample project and swap in `ae/MotionBlur.cpp`, `ae/MotionBlur.r` and `core/`.)
 * Install into `Plug-ins/` of your After Effects folder.

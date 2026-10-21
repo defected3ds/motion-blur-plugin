@@ -11,8 +11,10 @@ resource 'PiPL' (16000) {
         Name { "Vector Motion Blur" },
         Category { "Blur & Sharpen" },
 #ifdef AE_OS_WIN
-    #ifdef AE_PROC_INTELx64
+    #if defined(AE_PROC_INTELx64)
         CodeWin64X86 { "EffectMain" },
+    #elif defined(AE_PROC_ARM64)
+        CodeWinARM64 { "EffectMain" },
     #endif
 #else
     #ifdef AE_OS_MAC
@@ -27,6 +29,7 @@ resource 'PiPL' (16000) {
         AE_Effect_Global_OutFlags { 0x02000002 }, /* DEEP_COLOR_AWARE | WIDE_TIME_INPUT */
         AE_Effect_Global_OutFlags_2 { 0x00000000 },
         AE_Effect_Match_Name { "PIPELIFE Vector Motion Blur" },
-        AE_Reserved_Info { 0 }
+        AE_Reserved_Info { 0 },
+        AE_Effect_Support_URL { "https://www.adobe.com" }
     }
 };
