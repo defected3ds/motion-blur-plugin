@@ -7,11 +7,12 @@ estimating per-pixel motion from neighbouring frames and blurring along those ve
 1. **Flow** (`core/motion_blur.cpp`): coarse-to-fine, warped Horn–Schunck optical flow between
    current↔next and current↔previous frames. The two are averaged into one velocity (pixels/frame)
    per pixel; first/last frames fall back to the single available neighbour.
-2. **Blur**: each pixel averages bilinear taps along its velocity over the shutter window
-   (`Shutter Angle`, `Shutter Phase`), with the tap count adapted to the vector length.
+2. **Blur**: each pixel averages bilinear taps along the dominant local velocity over the shutter window
+   (`Shutter Angle`, `Shutter Phase`). With `Edge-Aware Blur` a tap only counts if the faster of the two pixels'
+   blur actually reaches the other, so fast objects smear past their silhouette without pulling in static background colour.
 
 ## Parameters
-Shutter Angle, Shutter Phase, Blur Amount %, Max Samples, Vector Smoothness, Show Motion Vectors.
+Shutter Angle, Shutter Phase, Blur Amount %, Max Samples, Vector Smoothness, Edge-Aware Blur, Show Motion Vectors.
 
 ## Build & test the core (any platform)
     cmake -S . -B build && cmake --build build && ./build/test_motion_blur
@@ -30,5 +31,5 @@ Status: the core is tested (`tests/`); `ae/MotionBlur.cpp` was written against t
 
 ## Limitations / ideas
 - CPU only, 8/16-bit (32-bit float needs SmartFX).
-- No foreground/background separation: blur from fast objects can bleed across occlusion edges (RSMB masks this); an alpha/depth-aware gather would fix it.
+- Edge bleed is only partly solved. `Edge-Aware Blur` (off by default) cuts the error around a moving object ~3.5x when vectors are accurate, but the Horn-Schunck flow smears an object's motion 10+ px into its surroundings, so on real footage it is roughly neutral (tests/ show this). The next real fix is better flow at occlusions (forward/backward consistency + edge-aware flow), not a better gather.
 - Linear motion within a frame; no rotation/curved paths.

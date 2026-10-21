@@ -156,6 +156,35 @@ FlowField estimateFlow(const Image& a, const Image& b, const Params& prm) {
     return out;
 }
 
+// Joint-bilateral filter of the vectors, guided by the frame's luma: vectors are only averaged
+// across pixels of similar colour, so motion boundaries snap to image edges instead of being
+// smoothed across them.
+static void sharpenFlowEdges(FlowField& f, const Image& guide, const Params& p) {
+    if (p.edgeSharpen <= 0.f) return;
+    const int W = f.w, H = f.h, R = 4;
+    Plane g = lumaOf(guide);
+    const float inv2r = 1.f / (2.f * p.edgeSharpen * p.edgeSharpen);
+    const float inv2s = 1.f / (2.f * 2.5f * 2.5f);
+    std::vector<float> ou(f.u.size()), ov(f.v.size());
+#pragma omp parallel for
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            float su = 0, sv = 0, sw = 0, gc = g(x, y);
+            for (int j = -R; j <= R; ++j)
+                for (int i = -R; i <= R; ++i) {
+                    int xx = std::min(std::max(x + i, 0), W - 1), yy = std::min(std::max(y + j, 0), H - 1);
+                    float dg = g(xx, yy) - gc;
+                    float w = std::exp(-(i * i + j * j) * inv2s - dg * dg * inv2r);
+                    size_t k = size_t(yy) * W + xx;
+                    su += w * f.u[k]; sv += w * f.v[k]; sw += w;
+                }
+            size_t o = size_t(y) * W + x;
+            ou[o] = su / sw; ov[o] = sv / sw;
+        }
+    f.u = std::move(ou);
+    f.v = std::move(ov);
+}
+
 FlowField estimateVelocity(const Image& cur, const Image* prev, const Image* next, const Params& p) {
     FlowField vel(cur.w, cur.h);
     FlowField fwd, bwd;
@@ -173,43 +202,125 @@ FlowField estimateVelocity(const Image& cur, const Image* prev, const Image* nex
             vel.v[i] = -bwd.v[i];
         }
     }
+    sharpenFlowEdges(vel, cur, p);
     return vel;
 }
 
+namespace {
+
+inline const float* clampedPx(const Image& im, int x, int y) {
+    x = std::min(std::max(x, 0), im.w - 1);
+    y = std::min(std::max(y, 0), im.h - 1);
+    return im.at(x, y);
+}
+
+inline void sampleBilinear(const Image& im, float sx, float sy, float* out) {
+    int x0 = int(std::floor(sx)), y0 = int(std::floor(sy));
+    float fx = sx - x0, fy = sy - y0;
+    const float *a = clampedPx(im, x0, y0), *b = clampedPx(im, x0 + 1, y0);
+    const float *c = clampedPx(im, x0, y0 + 1), *d = clampedPx(im, x0 + 1, y0 + 1);
+    for (int k = 0; k < 4; ++k)
+        out[k] = (a[k] + (b[k] - a[k]) * fx) * (1 - fy) + (c[k] + (d[k] - c[k]) * fx) * fy;
+}
+
+}  // namespace
+
 Image applyVectorBlur(const Image& cur, const FlowField& vel, const Params& p) {
     Image out(cur.w, cur.h);
+    const int W = cur.w, H = cur.h;
     const float t0 = p.shutterPhase / 360.f;
     const float t1 = t0 + p.shutterAngle / 360.f;
+    const float span = std::fabs(t1 - t0);
+    const float reachT = std::max(std::fabs(t0), std::fabs(t1));  // how far (in frames) a pixel smears
     const int maxN = std::max(1, p.maxSamples);
 
+    // Scaled velocities and per-pixel reach (px) = how far each pixel's own blur extends.
+    std::vector<float> vx(vel.u.size()), vy(vel.u.size()), reach(vel.u.size());
+    float maxReach = 0.f;
+    for (size_t i = 0; i < vx.size(); ++i) {
+        vx[i] = vel.u[i] * p.blurScale;
+        vy[i] = vel.v[i] * p.blurScale;
+        reach[i] = std::sqrt(vx[i] * vx[i] + vy[i] * vy[i]) * reachT;
+        maxReach = std::max(maxReach, reach[i]);
+    }
+
+    // Dominant-velocity map: per-tile max, then 3x3 tile neighbourhood max.
+    const int T = std::min(64, std::max(4, int(std::ceil(maxReach))));
+    const int tw = (W + T - 1) / T, th = (H + T - 1) / T;
+    std::vector<float> tu(size_t(tw) * th, 0.f), tv(tu.size(), 0.f), nu(tu.size(), 0.f), nv(tu.size(), 0.f);
+    if (p.edgeAware) {
+        auto mag2 = [](float a, float b) { return a * a + b * b; };
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                size_t i = size_t(y) * W + x, t = size_t(y / T) * tw + x / T;
+                if (mag2(vx[i], vy[i]) > mag2(tu[t], tv[t])) { tu[t] = vx[i]; tv[t] = vy[i]; }
+            }
+        for (int ty = 0; ty < th; ++ty)
+            for (int tx = 0; tx < tw; ++tx) {
+                size_t t = size_t(ty) * tw + tx;
+                for (int j = -1; j <= 1; ++j)
+                    for (int i = -1; i <= 1; ++i) {
+                        int ax = tx + i, ay = ty + j;
+                        if (ax < 0 || ay < 0 || ax >= tw || ay >= th) continue;
+                        size_t s = size_t(ay) * tw + ax;
+                        if (mag2(tu[s], tv[s]) > mag2(nu[t], nv[t])) { nu[t] = tu[s]; nv[t] = tv[s]; }
+                    }
+            }
+    }
+
 #pragma omp parallel for
-    for (int y = 0; y < cur.h; ++y) {
-        for (int x = 0; x < cur.w; ++x) {
-            size_t i = size_t(y) * cur.w + x;
-            float vx = vel.u[i] * p.blurScale, vy = vel.v[i] * p.blurScale;
-            float len = std::sqrt(vx * vx + vy * vy) * std::fabs(t1 - t0);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const size_t i = size_t(y) * W + x;
             float* dst = out.at(x, y);
+            const float* c0 = cur.at(x, y);
+
+            float ux = vx[i], uy = vy[i];
+            if (p.edgeAware) {
+                // Sample along the neighbourhood's dominant motion unless this pixel is itself
+                // (nearly) as fast, in which case its own direction wins.
+                size_t t = size_t(y / T) * tw + x / T;
+                float own2 = ux * ux + uy * uy, dom2 = nu[t] * nu[t] + nv[t] * nv[t];
+                if (own2 < 0.5625f * dom2) { ux = nu[t]; uy = nv[t]; }
+            }
+            float vmag = std::sqrt(ux * ux + uy * uy);
+            float len = vmag * span;
             if (len < 0.05f) {
-                std::copy(cur.at(x, y), cur.at(x, y) + 4, dst);
+                std::copy(c0, c0 + 4, dst);
                 continue;
             }
             int n = std::min(maxN, std::max(2, int(std::ceil(len)) + 1));
             float acc[4] = {0, 0, 0, 0};
+            float wsum = 0.f;
             for (int s = 0; s < n; ++s) {
-                float t = t0 + (t1 - t0) * (s + 0.5f) / n;
-                float sx = x + vx * t, sy = y + vy * t;
-                int x0 = int(std::floor(sx)), y0 = int(std::floor(sy));
-                float fx = sx - x0, fy = sy - y0;
-                auto cl = [&](int xx, int yy) {
-                    xx = std::min(std::max(xx, 0), cur.w - 1);
-                    yy = std::min(std::max(yy, 0), cur.h - 1);
-                    return cur.at(xx, yy);
-                };
-                const float *a = cl(x0, y0), *b = cl(x0 + 1, y0), *c = cl(x0, y0 + 1), *d = cl(x0 + 1, y0 + 1);
-                for (int k = 0; k < 4; ++k)
-                    acc[k] += (a[k] + (b[k] - a[k]) * fx) * (1 - fy) + (c[k] + (d[k] - c[k]) * fx) * fy;
+                float tt = t0 + (t1 - t0) * (s + 0.5f) / n;
+                float sx = x + ux * tt, sy = y + uy * tt;
+                float tap[4];
+                sampleBilinear(cur, sx, sy, tap);
+                float w = 1.f;
+                if (p.edgeAware) {
+                    // Scatter-as-gather: a faster tap (in front) contributes only if its own blur
+                    // reaches this pixel; a slower tap (behind) contributes while it lies within
+                    // this pixel's own blur range.
+                    int qx = std::min(std::max(int(std::floor(sx + 0.5f)), 0), W - 1);
+                    int qy = std::min(std::max(int(std::floor(sy + 0.5f)), 0), H - 1);
+                    size_t q = size_t(qy) * W + qx;
+                    float r = std::fabs(tt) * vmag;
+                    float qm = std::sqrt(vx[q] * vx[q] + vy[q] * vy[q]);
+                    float om = std::sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+                    if (qm <= om) {
+                        w = std::min(1.f, std::max(0.f, reach[i] - r + 0.5f));
+                    } else {
+                        w = std::min(1.f, std::max(0.f, reach[q] - r + 0.5f));
+                        float al = (vx[q] * ux + vy[q] * uy) / (qm * vmag);
+                        w *= std::min(1.f, std::max(0.f, al * 2.f + 0.5f));
+                    }
+                }
+                for (int k = 0; k < 4; ++k) acc[k] += w * tap[k];
+                wsum += w;
             }
-            for (int k = 0; k < 4; ++k) dst[k] = acc[k] / n;
+            // Rejected taps are replaced by this pixel's own colour.
+            for (int k = 0; k < 4; ++k) dst[k] = (acc[k] + (float(n) - wsum) * c0[k]) / n;
         }
     }
     return out;

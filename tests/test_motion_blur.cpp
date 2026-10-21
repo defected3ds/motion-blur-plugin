@@ -66,7 +66,90 @@ static void writePPM(const char* path, const Image& im) {
     std::fclose(f);
 }
 
+
+// Moving square over a static background. Ground truth = brute-force temporal supersampling.
+static void edgeTest() {
+    const int W = 128, H = 96, S = 40;
+    const float vxp = 12.f, x0 = 40.f, y0 = 28.f;
+    auto sceneAt = [&](int x, int y, float t, bool* fg) {
+        float sx0 = x0 + vxp * t;
+        bool in = x >= sx0 && x < sx0 + S && y >= y0 && y < y0 + S;
+        if (fg) *fg = in;
+        return in ? 0.9f - 0.3f * tex(x - vxp * t + 70, y + 20) : 0.15f + 0.3f * tex(x, y);
+    };
+    Image cur(W, H);
+    FlowField vel(W, H);
+    std::vector<unsigned char> mask(size_t(W) * H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            bool fg;
+            float v = sceneAt(x, y, 0, &fg);
+            float* px = cur.at(x, y);
+            px[0] = px[1] = px[2] = v; px[3] = 1.f;
+            mask[size_t(y) * W + x] = fg;
+            vel.u[size_t(y) * W + x] = fg ? vxp : 0.f;
+        }
+    Params p;
+    p.edgeAware = true;  // 180 degree shutter, centred (defaults)
+    Image truth(W, H);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            double a = 0; const int K = 96;
+            for (int s = 0; s < K; ++s) a += sceneAt(x, y, -0.25f + 0.5f * (s + 0.5f) / K, nullptr);
+            float* px = truth.at(x, y);
+            px[0] = px[1] = px[2] = float(a / K); px[3] = 1.f;
+        }
+    auto zoneRms = [&](const Image& im, int zone) {  // 0 all, 1 bg band outside square, 2 fg
+        double s = 0; int n = 0;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                bool fg = mask[size_t(y) * W + x];
+                bool nearBg = false;
+                if (!fg)
+                    for (int dx = -5; dx <= 5 && !nearBg; ++dx) {
+                        int xx = x + dx;
+                        nearBg = xx >= 0 && xx < W && mask[size_t(y) * W + xx];
+                    }
+                if ((zone == 1 && !nearBg) || (zone == 2 && !fg)) continue;
+                double d = im.at(x, y)[0] - truth.at(x, y)[0];
+                s += d * d; ++n;
+            }
+        return std::sqrt(s / std::max(n, 1));
+    };
+    Params po = p;
+    po.edgeAware = false;
+    Image oldI = applyVectorBlur(cur, vel, po), newI = applyVectorBlur(cur, vel, p);
+    double o1 = zoneRms(oldI, 1), n1 = zoneRms(newI, 1), o2 = zoneRms(oldI, 2), n2 = zoneRms(newI, 2);
+    std::printf("edge test (true vectors)  bg band: old %.4f new %.4f | fg: old %.4f new %.4f | all: old %.4f new %.4f\n",
+                o1, n1, o2, n2, zoneRms(oldI, 0), zoneRms(newI, 0));
+    CHECK(n1 < o1 * 0.6, "edge-aware did not reduce error outside the silhouette");
+    CHECK(n2 <= o2 * 1.05, "edge-aware made the object interior worse");
+    CHECK(zoneRms(newI, 0) < zoneRms(oldI, 0), "edge-aware worse overall");
+    // Full pipeline with estimated (not ground-truth) flow.
+    auto frameAt = [&](float tt) {
+        Image im(W, H);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                float v = sceneAt(x, y, tt, nullptr);
+                float* px = im.at(x, y);
+                px[0] = px[1] = px[2] = v; px[3] = 1.f;
+            }
+        return im;
+    };
+    Image fp = frameAt(-1.f), fn = frameAt(1.f);
+    Image oldE = motionBlur(cur, &fp, &fn, po), newE = motionBlur(cur, &fp, &fn, p);
+    std::printf("edge test (estimated flow) bg band: old %.4f new %.4f | fg: old %.4f new %.4f | all: old %.4f new %.4f\n",
+                zoneRms(oldE, 1), zoneRms(newE, 1), zoneRms(oldE, 2), zoneRms(newE, 2), zoneRms(oldE, 0), zoneRms(newE, 0));
+    // With estimated flow the gain disappears (vectors are smeared across the object edge), so only
+    // guard against a meaningful regression.
+    CHECK(zoneRms(newE, 0) <= zoneRms(oldE, 0) * 1.05, "edge-aware regressed with estimated flow");
+    writePPM("edge_old.ppm", oldI);
+    writePPM("edge_new.ppm", newI);
+    writePPM("edge_truth.ppm", truth);
+}
+
 int main() {
+    edgeTest();
     const int W = 128, H = 96;
     Params p;
 

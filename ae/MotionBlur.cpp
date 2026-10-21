@@ -24,6 +24,7 @@ enum {
     PARAM_BLUR_SCALE,
     PARAM_SAMPLES,
     PARAM_SMOOTHNESS,
+    PARAM_EDGE_AWARE,
     PARAM_SHOW_VECTORS,
     PARAM_COUNT
 };
@@ -55,6 +56,8 @@ static PF_Err ParamsSetup(PF_InData* in, PF_OutData* out, PF_ParamDef*[], PF_Lay
     PF_ADD_SLIDER("Max Samples", 2, 256, 2, 128, 64, PARAM_SAMPLES);
     AEFX_CLR_STRUCT(def);
     PF_ADD_FLOAT_SLIDERX("Vector Smoothness", 0.01, 1.0, 0.02, 0.4, 0.1, PF_Precision_HUNDREDTHS, 0, 0, PARAM_SMOOTHNESS);
+    AEFX_CLR_STRUCT(def);
+    PF_ADD_CHECKBOX("Edge-Aware Blur", "On", 0, 0, PARAM_EDGE_AWARE);
     AEFX_CLR_STRUCT(def);
     PF_ADD_CHECKBOX("Motion Vectors", "Show", 0, 0, PARAM_SHOW_VECTORS);
     out->num_params = PARAM_COUNT;
@@ -117,6 +120,7 @@ static PF_Err Render(PF_InData* in, PF_OutData*, PF_ParamDef* params[], PF_Layer
     p.blurScale = float(params[PARAM_BLUR_SCALE]->u.fs_d.value) / 100.f;
     p.maxSamples = params[PARAM_SAMPLES]->u.sd.value;
     p.smoothness = float(params[PARAM_SMOOTHNESS]->u.fs_d.value);
+    p.edgeAware = params[PARAM_EDGE_AWARE]->u.bd.value != 0;
     const bool showVectors = params[PARAM_SHOW_VECTORS]->u.bd.value != 0;
 
     // Neighbouring frames of the (already effect-processed) input layer.

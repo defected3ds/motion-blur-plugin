@@ -32,8 +32,10 @@ struct Params {
     float shutterPhase = -90.f;  // degrees; start of the shutter window relative to the frame
     float blurScale = 1.f;       // extra multiplier on vector length
     int   maxSamples = 64;       // upper bound on taps per pixel
+    bool  edgeAware = false;     // reach-weighted gather; big win with accurate vectors, neutral/worse with noisy ones
     // Flow estimation
     float smoothness = 0.1f;     // Horn-Schunck alpha (on 0..1 luma); higher = smoother vectors
+    float edgeSharpen = 0.08f;   // luma tolerance of the edge-guided vector filter (0 = off)
     int   iterations = 40;       // solver iterations per warp step
     int   warps = 2;             // warp steps per pyramid level
     int   maxLevels = 6;         // pyramid depth cap
